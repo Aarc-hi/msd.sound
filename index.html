@@ -7,7 +7,6 @@
 <style>
   html,body{margin:0;height:100%;background:radial-gradient(ellipse at 50% 38%,#f3f1ec 0%,#e2dfd8 55%,#c9c5bc 100%);color:#2b2a27;font:14px 'Helvetica Neue',Helvetica,Arial,sans-serif;overflow:hidden}
   #hint{position:fixed;left:0;right:0;bottom:18px;text-align:center;opacity:.7;pointer-events:none}
-  #label{position:fixed;top:18px;left:0;right:0;text-align:center;font-size:18px;letter-spacing:.05em;pointer-events:none}
   button{position:fixed;top:14px;right:14px;background:none;border:0;border-radius:0;box-shadow:none;outline:none;padding:8px 4px;margin:0;color:#2b2a27;font:400 14px 'Helvetica Neue',Helvetica,Arial,sans-serif;letter-spacing:.02em;cursor:pointer;opacity:.85}
   button:hover{opacity:1;text-decoration:underline}
 </style>
@@ -17,20 +16,16 @@
 </script>
 </head>
 <body>
-<div id="label"></div>
-<div id="hint">click the lid to open · hover objects · press and hold an object to hear its memory</div>
-<button id="export">Export .glb</button>
 <button id="mute" style="left:14px;right:auto">Sound: on</button>
 <script type="module">
 import * as THREE from 'three';
 import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
-import {GLTFExporter} from 'three/addons/exporters/GLTFExporter.js';
 import {RoomEnvironment} from 'three/addons/environments/RoomEnvironment.js';
 
 const scene = new THREE.Scene();
 
 const camera = new THREE.PerspectiveCamera(40, innerWidth/innerHeight, 0.1, 100);
-camera.position.set(0, 12, 12);
+
 const renderer = new THREE.WebGLRenderer({antialias:true, alpha:true});
 renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 0.7;
 renderer.setSize(innerWidth, innerHeight);
@@ -39,7 +34,7 @@ renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.VSMShadowMap;
 document.body.appendChild(renderer.domElement);
 const controls = new OrbitControls(camera, renderer.domElement);
-controls.enableDamping = true;
+controls.enableDamping = true; controls.enableZoom = false;   // the camera distance is driven by scroll / auto-pan below
 controls.maxPolarAngle = Math.PI * 0.49;
 
 // studio lighting: soft environment + large soft key, fill and rim
@@ -47,15 +42,16 @@ const pmrem = new THREE.PMREMGenerator(renderer);
 scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
 scene.add(new THREE.AmbientLight(0xffffff, 0.12));
 const sun = new THREE.DirectionalLight(0xfff4e6, 1.5);   // key: upper left, soft shadows
-sun.position.set(-6, 12, 6); sun.castShadow = true;
-sun.shadow.mapSize.set(2048, 2048); sun.shadow.radius = 9; sun.shadow.blurSamples = 20; sun.shadow.bias = -0.0003; sun.shadow.normalBias = .02;
-sun.shadow.camera.left = -7; sun.shadow.camera.right = 7; sun.shadow.camera.top = 7; sun.shadow.camera.bottom = -7; sun.shadow.camera.far = 40;
+sun.position.set(-9, 10, 1.5); sun.castShadow = true;
+sun.shadow.mapSize.set(4096, 4096); sun.shadow.radius = 9; sun.shadow.blurSamples = 20; sun.shadow.bias = -0.0003; sun.shadow.normalBias = .02;
+sun.shadow.camera.left = -13; sun.shadow.camera.right = 13; sun.shadow.camera.top = 9; sun.shadow.camera.bottom = -9; sun.shadow.camera.far = 40;
 scene.add(sun);
 const fill = new THREE.DirectionalLight(0xe8f0ff, 0.5); fill.position.set(8, 5, 4); scene.add(fill);
 const rim = new THREE.DirectionalLight(0xffffff, 0.6); rim.position.set(0, 6, -9); scene.add(rim);
 
-const floor = new THREE.Mesh(new THREE.PlaneGeometry(40,40), new THREE.ShadowMaterial({opacity:.4}));
-floor.rotation.x = -Math.PI/2; floor.receiveShadow = true; scene.add(floor);
+// shadow catcher: the box casts its shadow onto the light backdrop
+const floor = new THREE.Mesh(new THREE.PlaneGeometry(60,60), new THREE.ShadowMaterial({opacity:.3}));
+floor.rotation.x = -Math.PI/2; floor.position.y = -.002; floor.receiveShadow = true; scene.add(floor);
 
 // ---- box ----
 const W = 6.0, D = 6.9, H = 2.1, T = 0.05;
@@ -87,20 +83,27 @@ function lidTopMat(){
   t.repeat.set(1, .26); t.offset.set(0, .74);
   const m = new THREE.MeshStandardMaterial({map:t, roughness:.9}); m.userData.keepBright = true; return m;
 }
+// inside of the lid: the same top-of-image strip as the outside, stretched wider
+function lidInsideMat(){
+  const t = skinSrc.clone(); t.needsUpdate = true;
+  t.repeat.set(.4, .26); t.offset.set(.3, .74);
+  const m = new THREE.MeshStandardMaterial({map:t, roughness:.9}); m.userData.keepBright = true; return m;
+}
 const LW = W+.2, LD = D+.2, SK = .6;                // lid size and skirt height
-const topFaces = skinFaces(LW,T,LD,.3); topFaces[2] = lidTopMat();
+const topFaces = skinFaces(LW,T,LD,.3); topFaces[2] = lidTopMat(); topFaces[3] = lidInsideMat();
 const lidMesh = new THREE.Mesh(new THREE.BoxGeometry(LW,T,LD), topFaces);
 lidMesh.position.set(0,0,D/2); lid.add(lidMesh);
 // skirt: four sides hanging down so the closed lid wraps over the box
 const skirtGap = T + .03;
 const skirts = [
-  [LW, SK, T,  0, -SK/2, D + skirtGap,   .05],   // front
-  [LW, SK, T,  0, -SK/2, -skirtGap,      .55],   // back
-  [T, SK, LD,  W/2 + skirtGap, -SK/2, D/2, .25], // right
-  [T, SK, LD, -W/2 - skirtGap, -SK/2, D/2, .8],  // left
+  [LW, SK, T,  0, -SK/2, D + skirtGap,   .05, 5],   // front
+  [LW, SK, T,  0, -SK/2, -skirtGap,      .55, 4],   // back
+  [T, SK, LD,  W/2 + skirtGap, -SK/2, D/2, .25, 1], // right
+  [T, SK, LD, -W/2 - skirtGap, -SK/2, D/2, .8, 0],  // left
 ];
-for (const [w,h,d,x,y,z,seed] of skirts) {
-  const m = new THREE.Mesh(new THREE.BoxGeometry(w,h,d), skinFaces(w,h,d,seed));
+for (const [w,h,d,x,y,z,seed,inner] of skirts) {
+  const faces = skinFaces(w,h,d,seed); faces[inner] = lidInsideMat();   // the face looking into the box
+  const m = new THREE.Mesh(new THREE.BoxGeometry(w,h,d), faces);
   m.position.set(x,y,z); lid.add(m);
 }
 lid.traverse(o => { if (o.isMesh) o.userData.target = lid; });
@@ -322,13 +325,23 @@ for (const [name, build, x, z, rot, lift] of placements) {
 // keep photo details crisp: the photos already carry their own light, so tone the lit result down
 box.traverse(o => {
   if (!o.isMesh) return;
+  o.castShadow = true; o.receiveShadow = true;
   for (const m of [].concat(o.material)) if (m.map && !m.userData.keepBright) { m.color.setScalar(.68); m.envMapIntensity = .35; }
 });
+
+// soft contact shadow right under the box, so it sits on the table instead of floating
+{
+  const c = document.createElement("canvas"); c.width = c.height = 256;
+  const x = c.getContext("2d"), g = x.createRadialGradient(128,128,40,128,128,128);
+  g.addColorStop(0, "rgba(0,0,0,.7)"); g.addColorStop(.55, "rgba(0,0,0,.4)"); g.addColorStop(1, "rgba(0,0,0,0)");
+  x.fillStyle = g; x.fillRect(0,0,256,256);
+  const blob = new THREE.Mesh(new THREE.PlaneGeometry(W+3.2, D+3.2), new THREE.MeshBasicMaterial({map:new THREE.CanvasTexture(c), transparent:true, depthWrite:false}));
+  blob.rotation.x = -Math.PI/2; blob.position.y = .004; scene.add(blob);
+}
 
 // ---- interaction ----
 const ray = new THREE.Raycaster(), mouse = new THREE.Vector2(-9,-9);
 let opened = false, lidAngle = 0, hovered = null;
-const label = document.getElementById('label');
 const setMouse = e => mouse.set(e.clientX/innerWidth*2-1, -(e.clientY/innerHeight)*2+1);
 addEventListener('pointermove', setMouse);
 function rootOf(o){ while (o && !(o.userData && o.userData.name)) o = o.parent; return o; }
@@ -344,9 +357,11 @@ const SOUND_KEYS = {
   'Serendipity lanyard':'lanyard', '3D glasses: look with love':'glasses', 'Cat sticker':'cat-sticker',
   'Bouquet and polaroids':'bouquet',
 };
-const PLACEHOLDERS = true;
+// per-sound loudness (1 = as recorded); lower it if a recording is too loud
+const SOUND_GAIN = { 'birthday-card': .4 };
+const PLACEHOLDERS = false;   // no stand-in beeps: only your real recordings play
 const EXTS = ['mp3','wav','ogg','m4a'];
-const ALL_KEYS = ['bg-sound','lid-open','lid-close','room-tone', ...Object.values(SOUND_KEYS).flatMap(k => [k+'-surface', k+'-memory'])];
+const ALL_KEYS = ['bg-sound','lid-open','room-tone', ...Object.values(SOUND_KEYS).map(k => k+'-memory')];
 const raw = {}, buffers = {};
 let actx = null, master = null, muted = false, ready = null;
 
@@ -389,7 +404,7 @@ function play(key, {gain = 1, loop = false, fadeIn = .03, dest = master, real = 
     g.gain.linearRampToValueAtTime(0, n + fade); try { src.stop(n + fade + .02); } catch (e) {}
   }};
 }
-let bg = null, bgAlive = false, ambient = null, holding = null, holdObj = null, lastHover = 0;
+let bg = null, bgAlive = false, ambient = null, holding = null;
 function finale(){
   const bus = actx.createGain(); bus.connect(master);
   const t = actx.currentTime; bus.gain.setValueAtTime(1, t + 2.5); bus.gain.linearRampToValueAtTime(0, t + 6.5);
@@ -404,25 +419,22 @@ addEventListener('pointerdown', startBg, {once:true});
 const hooks = {
   async lid(open){
     await ensureAudio(); if (actx.state === 'suspended' && !muted) actx.resume();
-    if (open) { play('lid-open'); ambient = play('room-tone', {gain:.2, loop:true, fadeIn:2}); }
-    else { play('lid-close'); if (ambient) ambient.stop(1.5); ambient = null; finale(); }
+    if (open) { play('lid-open', {gain:2.5, real:true}); ambient = play('room-tone', {gain:.2, loop:true, fadeIn:2}); }
+    else { hooks.hoverEnd(2.5); play('lid-open', {gain:2.5, real:true}); if (ambient) ambient.stop(2.5); ambient = null; }   // anything playing inside fades away slowly
   },
+  // an object's sound plays for as long as the pointer rests on it (lid open), and fades out when it leaves
   hover(name){
-    if (!opened || !actx || holding) return;
-    const now = performance.now(); if (now - lastHover < 120) return; lastHover = now;
-    play(SOUND_KEYS[name] + '-surface', {gain:.8});
-  },
-  holdStart(name, obj){
-    if (!actx) return;
-    holding = play(SOUND_KEYS[name] + '-memory', {gain:1, fadeIn:.5}); holdObj = obj; controls.enabled = false;
+    if (!opened || !actx) return;
+    hooks.hoverEnd();
+    const key = SOUND_KEYS[name];
+    holding = play(key + '-memory', {gain:SOUND_GAIN[key] ?? 1, fadeIn:.4, real:true});
+    if (!holding) return;
     if (ambient) ambient.gain.gain.linearRampToValueAtTime(.06, actx.currentTime + .4);
-    if (bg) bg.gain.gain.linearRampToValueAtTime(.15, actx.currentTime + .4);
   },
-  holdEnd(){
-    if (holding) holding.stop(.8);
+  hoverEnd(fade = .6){
+    if (!holding) return;
+    holding.stop(fade); holding = null;
     if (ambient && actx) ambient.gain.gain.linearRampToValueAtTime(.2, actx.currentTime + 1);
-    if (bg && actx) bg.gain.gain.linearRampToValueAtTime(.45, actx.currentTime + 1);
-    holding = null; holdObj = null; controls.enabled = true;
   },
 };
 addEventListener('pointerdown', e => {
@@ -431,10 +443,7 @@ addEventListener('pointerdown', e => {
   const hit = pick();
   if (!hit) return;
   if (hit.object.userData.target === lid) { opened = !opened; hooks.lid(opened); }
-  else if (opened) { const r = rootOf(hit.object); if (r) hooks.holdStart(r.userData.name, r); }
 });
-addEventListener('pointerup', () => hooks.holdEnd());
-addEventListener('pointercancel', () => hooks.holdEnd());
 document.getElementById('mute').onclick = async e => {
   muted = !muted; e.currentTarget.textContent = 'Sound: ' + (muted ? 'off' : 'on');
   if (!actx) return;
@@ -449,27 +458,50 @@ document.getElementById('mute').onclick = async e => {
   }
 };
 
-document.getElementById('export').onclick = () => {
-  new GLTFExporter().parse(box, buf => {
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(new Blob([buf], {type:'model/gltf-binary'}));
-    a.download = 'memory-box.glb'; a.click();
-  }, console.error, {binary:true});
-};
 
+// ---- camera path: far view of the table -> close, ideal view of the box ----
+// scroll moves along the path; with no input the camera glides the same way by itself
+const T0 = new THREE.Vector3(0, 0, 0),     P0 = new THREE.Vector3(0, 12, 21);   // far: box small in the view
+const T1 = new THREE.Vector3(0, .7, 0),    P1 = new THREE.Vector3(0, 9.2, 12.8); // near: box fills the view
+const S0 = new THREE.Spherical().setFromVector3(P0.clone().sub(T0));
+const S1 = new THREE.Spherical().setFromVector3(P1.clone().sub(T1));
+const AUTO_SECONDS = 7;
+let pTarget = 0, pCur = 0, userScrolled = false, userPhi = 0, lastPhi = S0.phi, lastT = performance.now();
+camera.position.copy(P0); controls.target.copy(T0); camera.lookAt(T0);
+addEventListener("wheel", e => {
+  e.preventDefault(); userScrolled = true;
+  pTarget = Math.min(1, Math.max(0, pTarget + e.deltaY * .0009));
+}, {passive:false});
+const _off = new THREE.Vector3(), _sph = new THREE.Spherical(), _tgt = new THREE.Vector3();
+function updateCamera(){
+  const now = performance.now(), dt = Math.min(.1, (now - lastT)/1000); lastT = now;
+  if (!userScrolled) pTarget = Math.min(1, pTarget + dt/AUTO_SECONDS);          // glide in on its own
+  pCur += (pTarget - pCur) * Math.min(1, dt*4);
+  const e = pCur*pCur*(3 - 2*pCur);
+  controls.update();                                                           // applies the user's drag
+  _off.copy(camera.position).sub(controls.target); _sph.setFromVector3(_off);
+  userPhi += _sph.phi - lastPhi;                                               // keep any up/down drag as an offset
+  _sph.phi = Math.min(Math.PI*.49, Math.max(.12, S0.phi + (S1.phi - S0.phi)*e + userPhi));
+  _sph.radius = S0.radius + (S1.radius - S0.radius)*e;
+  lastPhi = _sph.phi;
+  _tgt.copy(T0).lerp(T1, e);
+  controls.target.copy(_tgt);
+  camera.position.copy(_tgt).add(_off.setFromSpherical(_sph));
+  camera.lookAt(_tgt);
+}
 function animate(){
   requestAnimationFrame(animate);
   lidAngle += ((opened ? -Math.PI*0.62 : 0) - lidAngle) * .08;
   lid.rotation.x = lidAngle;
   const h = pick();
   const obj = h && h.object.userData.target !== lid ? rootOf(h.object) : null;
-  if (obj !== hovered) { hovered = obj; label.textContent = obj ? obj.userData.name : ''; if (obj) hooks.hover(obj.userData.name); }
+  if (obj !== hovered) { hovered = obj; hooks.hoverEnd(); if (obj) hooks.hover(obj.userData.name); }
   for (const o of objects) {
-    const target = o === holdObj ? 1.1 : (o === hovered && opened) ? .5 : 0;
+    const target = (o === hovered && opened) ? .5 : 0;
     o.userData.lift += (target - o.userData.lift) * .15;
     o.position.y = o.userData.baseY + o.userData.lift;
   }
-  controls.update();
+  updateCamera();
   renderer.render(scene, camera);
 }
 animate();

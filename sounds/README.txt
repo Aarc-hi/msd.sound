@@ -1,16 +1,17 @@
 Drop your recordings in this folder. Use these exact file names (mp3, wav, ogg or m4a all work).
-Anything missing plays a quiet placeholder tone so you can test the wiring.
+Anything missing is simply silent.
 
-lid-open            plays when the lid opens
-lid-close           plays when the lid closes
-room-tone           quiet loop that runs while the box is open
+bg-sound            loops quietly for the whole visit (starts on the first click)
+lid-open            plays when the lid opens AND when it closes
+room-tone           optional quiet loop that runs while the box is open
 
-For each object, two files:
-  <name>-surface    short sound on hover (what the object feels like)
-  <name>-memory     longer sound while you press and hold (the memory it carries)
+For each object, one file named <name>-memory. It plays while the pointer rests on the object
+(lid open) and fades out when the pointer leaves or the lid closes.
 
 <name> is one of:
   turtle-card   note   postcard   ticket   birthday-card
   chocolate     lanyard   glasses   cat-sticker   bouquet
 
-Example: ticket-surface.wav, ticket-memory.mp3
+Example: ticket-memory.mp3
+
+Loudness per object can be set in SOUND_GAIN near the top of the sound code in index.html.
