@@ -1,0 +1,479 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Memory Box</title>
+<style>
+  html,body{margin:0;height:100%;background:radial-gradient(ellipse at 50% 38%,#f3f1ec 0%,#e2dfd8 55%,#c9c5bc 100%);color:#2b2a27;font:14px 'Helvetica Neue',Helvetica,Arial,sans-serif;overflow:hidden}
+  #hint{position:fixed;left:0;right:0;bottom:18px;text-align:center;opacity:.7;pointer-events:none}
+  #label{position:fixed;top:18px;left:0;right:0;text-align:center;font-size:18px;letter-spacing:.05em;pointer-events:none}
+  button{position:fixed;top:14px;right:14px;background:none;border:0;border-radius:0;box-shadow:none;outline:none;padding:8px 4px;margin:0;color:#2b2a27;font:400 14px 'Helvetica Neue',Helvetica,Arial,sans-serif;letter-spacing:.02em;cursor:pointer;opacity:.85}
+  button:hover{opacity:1;text-decoration:underline}
+</style>
+<script type="importmap">
+{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+"three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}
+</script>
+</head>
+<body>
+<div id="label"></div>
+<div id="hint">click the lid to open · hover objects · press and hold an object to hear its memory</div>
+<button id="export">Export .glb</button>
+<button id="mute" style="left:14px;right:auto">Sound: on</button>
+<script type="module">
+import * as THREE from 'three';
+import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
+import {GLTFExporter} from 'three/addons/exporters/GLTFExporter.js';
+import {RoomEnvironment} from 'three/addons/environments/RoomEnvironment.js';
+
+const scene = new THREE.Scene();
+
+const camera = new THREE.PerspectiveCamera(40, innerWidth/innerHeight, 0.1, 100);
+camera.position.set(0, 12, 12);
+const renderer = new THREE.WebGLRenderer({antialias:true, alpha:true});
+renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 0.7;
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.VSMShadowMap;
+document.body.appendChild(renderer.domElement);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.maxPolarAngle = Math.PI * 0.49;
+
+// studio lighting: soft environment + large soft key, fill and rim
+const pmrem = new THREE.PMREMGenerator(renderer);
+scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+scene.add(new THREE.AmbientLight(0xffffff, 0.12));
+const sun = new THREE.DirectionalLight(0xfff4e6, 1.5);   // key: upper left, soft shadows
+sun.position.set(-6, 12, 6); sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048); sun.shadow.radius = 9; sun.shadow.blurSamples = 20; sun.shadow.bias = -0.0003; sun.shadow.normalBias = .02;
+sun.shadow.camera.left = -7; sun.shadow.camera.right = 7; sun.shadow.camera.top = 7; sun.shadow.camera.bottom = -7; sun.shadow.camera.far = 40;
+scene.add(sun);
+const fill = new THREE.DirectionalLight(0xe8f0ff, 0.5); fill.position.set(8, 5, 4); scene.add(fill);
+const rim = new THREE.DirectionalLight(0xffffff, 0.6); rim.position.set(0, 6, -9); scene.add(rim);
+
+const floor = new THREE.Mesh(new THREE.PlaneGeometry(40,40), new THREE.ShadowMaterial({opacity:.4}));
+floor.rotation.x = -Math.PI/2; floor.receiveShadow = true; scene.add(floor);
+
+// ---- box ----
+const W = 6.0, D = 6.9, H = 2.1, T = 0.05;
+const plastic = new THREE.MeshStandardMaterial({color:0xcdbd9c, roughness:.8, side:THREE.DoubleSide});
+const box = new THREE.Group(); scene.add(box);
+const part = (w,h,d,x,y,z,m=plastic)=>{const o=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),m);o.position.set(x,y,z);box.add(o);return o;};
+// the whole box is printed with one image: every face (inside and out) shows its own slice, stretched a little wider than the photo
+const skinSrc = new THREE.TextureLoader().load("box-skin.webp"); skinSrc.colorSpace = THREE.SRGBColorSpace; skinSrc.anisotropy = 8;
+const SKIN_AR = 896/1344, STRETCH = 1.35;
+function skinMat(w, h, off){
+  const t = skinSrc.clone(); t.needsUpdate = true;
+  const want = (w/h)/STRETCH;                       // crop to this shape, then it gets stretched by STRETCH
+  if (want > SKIN_AR) { const ry = SKIN_AR/want; t.repeat.set(1, ry); t.offset.set(0, (1-ry)*off); }
+  else { const rx = want/SKIN_AR; t.repeat.set(rx, 1); t.offset.set((1-rx)*off, 0); }
+  const m = new THREE.MeshStandardMaterial({map:t, roughness:.9}); m.userData.keepBright = true; return m;
+}
+// six faces in three.js order: +x, -x, +y, -y, +z, -z
+const skinFaces = (w, h, d, seed) => [
+  skinMat(d,h,(seed+.10)%1), skinMat(d,h,(seed+.35)%1), skinMat(w,d,(seed+.60)%1),
+  skinMat(w,d,(seed+.85)%1), skinMat(w,h,(seed+.20)%1), skinMat(w,h,(seed+.70)%1)];
+part(W,T,D,0,T/2,0, skinFaces(W,T,D,.1));
+part(W,H,T,0,H/2,-D/2, skinFaces(W,H,T,.15)); part(W,H,T,0,H/2,D/2, skinFaces(W,H,T,.45));
+part(T,H,D,-W/2,H/2,0, skinFaces(T,H,D,.7)); part(T,H,D,W/2,H/2,0, skinFaces(T,H,D,.9));
+const lid = new THREE.Group();
+lid.position.set(0, H+T, -D/2);
+// lid top shows only the very top strip of the image (no cat), stretched down over the lid
+function lidTopMat(){
+  const t = skinSrc.clone(); t.needsUpdate = true;
+  t.repeat.set(1, .26); t.offset.set(0, .74);
+  const m = new THREE.MeshStandardMaterial({map:t, roughness:.9}); m.userData.keepBright = true; return m;
+}
+const LW = W+.2, LD = D+.2, SK = .6;                // lid size and skirt height
+const topFaces = skinFaces(LW,T,LD,.3); topFaces[2] = lidTopMat();
+const lidMesh = new THREE.Mesh(new THREE.BoxGeometry(LW,T,LD), topFaces);
+lidMesh.position.set(0,0,D/2); lid.add(lidMesh);
+// skirt: four sides hanging down so the closed lid wraps over the box
+const skirtGap = T + .03;
+const skirts = [
+  [LW, SK, T,  0, -SK/2, D + skirtGap,   .05],   // front
+  [LW, SK, T,  0, -SK/2, -skirtGap,      .55],   // back
+  [T, SK, LD,  W/2 + skirtGap, -SK/2, D/2, .25], // right
+  [T, SK, LD, -W/2 - skirtGap, -SK/2, D/2, .8],  // left
+];
+for (const [w,h,d,x,y,z,seed] of skirts) {
+  const m = new THREE.Mesh(new THREE.BoxGeometry(w,h,d), skinFaces(w,h,d,seed));
+  m.position.set(x,y,z); lid.add(m);
+}
+lid.traverse(o => { if (o.isMesh) o.userData.target = lid; });
+box.add(lid);
+
+// ---- texture helpers ----
+const loader = new THREE.TextureLoader();
+const cache = {};
+function tex(file){
+  if (!cache[file]) { const t = loader.load(file); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8; cache[file] = t; }
+  return cache[file];
+}
+const paper = new THREE.MeshStandardMaterial({color:0xece6d6, roughness:.9});
+
+// ---- background fill: the lower layers, not interactive ----
+function crop(file, x, y, w, h, iw, ih){
+  const t = loader.load(file); t.colorSpace = THREE.SRGBColorSpace;
+  t.repeat.set(w/iw, h/ih); t.offset.set(x/iw, 1-(y+h)/ih); return t;
+}
+const side = new THREE.MeshStandardMaterial({color:0x8a7f6a, roughness:1});
+function slab(w,h,d,y,t,rot){
+  const top = new THREE.MeshStandardMaterial({map:t, roughness:1});
+  const m = new THREE.Mesh(new THREE.BoxGeometry(w,h,d), [side,side,top,side,side,side]);
+  m.position.set(0,y,0); m.rotation.y = rot; m.castShadow = true; m.receiveShadow = true; box.add(m);
+}
+slab(W-.2, .32, D-.2, .05+.16, crop("fill-a.jpg",75,395,740,790,900,1600), 0);
+slab(W-.9, .12, D-1.0, .37+.06, crop("fill-b.jpg",45,575,780,790,900,1600), .05);
+const BASE = .52;
+
+// ---- object builders: every shape is cut from the photo by its corner/outline points ----
+// quad warped from 4 source-image corners [TL,TR,BR,BL], subdivided so perspective looks right
+function quadGeo(c, iw, ih, w, h, N = 8){
+  const pos = [], uv = [], idx = [];
+  const lerp = (a,b,t) => [a[0]+(b[0]-a[0])*t, a[1]+(b[1]-a[1])*t];
+  for (let j = 0; j <= N; j++) {
+    const v = j/N, L = lerp(c[0],c[3],v), R = lerp(c[1],c[2],v);
+    for (let i = 0; i <= N; i++) {
+      const u = i/N, p = lerp(L,R,u);
+      pos.push((u-.5)*w, 0, (v-.5)*h); uv.push(p[0]/iw, 1-p[1]/ih);
+    }
+  }
+  for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
+    const a = j*(N+1)+i, b = a+1, c2 = a+N+1, d = c2+1;
+    idx.push(a,c2,d, a,d,b);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos,3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(uv,2));
+  g.setIndex(idx); g.computeVertexNormals();
+  return g;
+}
+function texturedQuad(file, iw, ih, corners, w, h){
+  const m = new THREE.Mesh(quadGeo(corners, iw, ih, w, h),
+    new THREE.MeshStandardMaterial({map:tex(file), roughness:1, side:THREE.DoubleSide}));
+  m.castShadow = true; m.receiveShadow = true; return m;
+}
+function flatItem(file, iw, ih, corners, w, h, thick = .02){
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.BoxGeometry(w, thick, h), paper);
+  body.position.y = -thick/2; body.castShadow = true; g.add(body);
+  const top = texturedQuad(file, iw, ih, corners, w, h); top.position.y = .002; g.add(top);
+  return g;
+}
+// outline cut from the photo (points in source px), lying flat
+function outlineGeo(pts, iw, ih, s, holes = [], depth = 0){
+  const shape = new THREE.Shape(pts.map(([x,y]) => new THREE.Vector2(x*s, -y*s)));
+  for (const h of holes) shape.holes.push(new THREE.Path(h.map(([x,y]) => new THREE.Vector2(x*s, -y*s))));
+  const uvGen = {
+    generateTopUV(geo, v, a, b, c){
+      return [a,b,c].map(i => new THREE.Vector2(v[i*3]/s/iw, 1 - (-v[i*3+1]/s)/ih));
+    },
+    generateSideWallUV(){ return [0,1,2,3].map(() => new THREE.Vector2(.41,.79)); }
+  };
+  const g = depth > 0
+    ? new THREE.ExtrudeGeometry(shape, {depth, bevelEnabled:false, UVGenerator:uvGen})
+    : new THREE.ShapeGeometry(shape);
+  if (depth === 0) {
+    const p = g.attributes.position, uv = [];
+    for (let i = 0; i < p.count; i++) uv.push(p.getX(i)/s/iw, 1 - (-p.getY(i)/s)/ih);
+    g.setAttribute('uv', new THREE.Float32BufferAttribute(uv,2));
+  }
+  const xs = pts.map(p=>p[0]), ys = pts.map(p=>p[1]);
+  const cx = (Math.min(...xs)+Math.max(...xs))/2, cy = (Math.min(...ys)+Math.max(...ys))/2;
+  g.translate(-cx*s, cy*s, 0);
+  g.rotateX(-Math.PI/2);
+  return g;
+}
+const roundRect = (x0,y0,x1,y1,r=28) => {
+  const o = [];
+  const corner = (cx,cy,a0) => { for (let k=0;k<=5;k++){ const a=a0+k*Math.PI/10; o.push([cx+r*Math.cos(a), cy+r*Math.sin(a)]); } };
+  corner(x1-r,y0+r,-Math.PI/2); corner(x1-r,y1-r,0); corner(x0+r,y1-r,Math.PI/2); corner(x0+r,y0+r,Math.PI);
+  return o;
+};
+
+function turtleCard(){ return flatItem('objects/10.jpg',900,1600,[[146,536],[720,536],[753,1335],[131,1347]], 2.6, 3.45); }
+function noteCard(){ return flatItem('objects/29.jpg',900,1600,[[190,452],[700,442],[732,1200],[204,1210]], 2.2, 3.2); }
+function postcard(){ return flatItem('objects/15.jpg',1600,900,[[498,200],[1130,195],[1222,845],[482,885]], 2.6, 2.7); }
+function ticket(){ return flatItem('objects/16.jpg',1600,900,[[518,214],[1202,215],[1226,640],[516,656]], 2.6, 1.6, .015); }
+
+function chocolate(){
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.BoxGeometry(4.4,.18,2.1), new THREE.MeshStandardMaterial({color:0x6fb5aa, roughness:.8}));
+  body.position.y = .09; body.castShadow = true; g.add(body);
+  const top = texturedQuad('objects/23.jpg',1600,900,[[300,248],[1245,246],[1290,748],[262,760]], 4.4, 2.1);
+  top.position.y = .182; g.add(top);
+  return g;
+}
+
+function glasses(){
+  const s = 0.0039;
+  const outline = [[245,312],[485,312],[497,1397],[275,1380],[235,1350],[230,1010],[322,870],[222,745],[208,415],[243,345]];
+  const holes = [roundRect(270,455,442,757), roundRect(285,1015,455,1312)];
+  const m = new THREE.Mesh(outlineGeo(outline, 900, 1600, s, holes, .03),
+    new THREE.MeshStandardMaterial({map:tex('objects/09.jpg'), roughness:1, side:THREE.DoubleSide}));
+  m.castShadow = true;
+  const g = new THREE.Group(); m.rotation.y = Math.PI/2; g.add(m); return g;
+}
+
+function catSticker(){
+  const pts = [[655,515],[690,445],[770,380],[795,365],[800,395],[850,410],[880,380],[885,420],[1000,410],[1100,420],[1160,460],[1165,620],[1130,660],[1080,640],[1000,600],[940,610],[870,650],[850,700],[820,735],[790,700],[780,620],[730,570],[690,540]];
+  const m = new THREE.Mesh(outlineGeo(pts,1600,900,.0033),
+    new THREE.MeshStandardMaterial({map:tex('objects/14.jpg'), roughness:1, side:THREE.DoubleSide}));
+  m.castShadow = true; const g = new THREE.Group(); g.add(m); return g;
+}
+
+// birthday card standing open: balloons outside, "Happi Budday" and the message inside
+function birthdayCard(){
+  const g = new THREE.Group(); const pw = 1.9, ph = 1.3;
+  g.add(flatItem('objects/32.jpg',900,1600,[[212,875],[715,860],[765,1095],[210,1140]], pw, ph, .03));
+  const hinge = new THREE.Group(); hinge.position.set(0, 0, -ph/2); hinge.rotation.x = Math.PI/2 - .17; g.add(hinge);
+  const inner = texturedQuad('objects/32.jpg',900,1600,[[185,608],[722,590],[702,855],[215,870]], pw, ph);
+  inner.geometry.translate(0,.013,-ph/2); hinge.add(inner);
+  const outerGeo = quadGeo([[170,648],[808,660],[785,1040],[192,1045]], 900, 1600, pw, ph);
+  outerGeo.scale(-1,1,1); outerGeo.translate(0,-.013,-ph/2);
+  hinge.add(new THREE.Mesh(outerGeo, new THREE.MeshStandardMaterial({map:tex('objects/28.jpg'), roughness:1, side:THREE.DoubleSide})));
+  const core = new THREE.Mesh(new THREE.BoxGeometry(pw,.02,ph), paper); core.position.set(0,0,-ph/2); hinge.add(core);
+  hinge.traverse(o => { if (o.isMesh) o.castShadow = true; });
+  return g;
+}
+
+function lanyard(){
+  const c = document.createElement('canvas'); c.width = 2048; c.height = 96;
+  const x = c.getContext('2d');
+  x.fillStyle = '#3b2a22'; x.fillRect(0,0,2048,96);
+  x.fillStyle = '#e8a9b6'; x.font = 'bold 60px Helvetica, Arial'; x.textBaseline = 'middle';
+  x.fillText('SERENDIPITY ARTS FESTIVAL  -  10th EDITION', 30, 50);
+  for (let i = 0; i < 21; i++) for (let j = 0; j < 2; j++) if ((i+j)%2 === 0) x.fillRect(1040+i*48, j*48, 48, 48);
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.wrapS = THREE.RepeatWrapping; t.anisotropy = 8;
+  const N = 420, w = .3, pos = [], uv = [], idx = [];
+  const TURNS = 1.75, UP = new THREE.Vector3(0,1,0);
+  // a loose, crumpled pile: shrinking spiral with wobble, uneven heights and a banking twist
+  const P = a => {
+    const f = a/(Math.PI*2*TURNS), rad = 1.35 - .7*f;
+    return new THREE.Vector3(
+      rad*Math.cos(a) + .3*Math.sin(3*a+1) + .14*Math.sin(7*a),
+      .05 + .06*f*TURNS + .05*Math.sin(2.3*a+.7) + .025*Math.sin(6*a),
+      .8*rad*Math.sin(a) + .25*Math.cos(2*a+.5) + .12*Math.sin(5*a));
+  };
+  for (let i = 0; i <= N; i++) {
+    const a = i/N*Math.PI*2*TURNS, p = P(a), q = P(a+.01);
+    const tan = q.clone().sub(p).normalize();
+    const n0 = new THREE.Vector3().crossVectors(tan, UP).normalize();
+    const upv = new THREE.Vector3().crossVectors(tan, n0).normalize();
+    const tw = 1.0*Math.sin(2.7*a+.4) + .5*Math.sin(5.1*a);
+    const sd = n0.multiplyScalar(Math.cos(tw)).add(upv.multiplyScalar(Math.sin(tw))).multiplyScalar(w/2);
+    pos.push(p.x+sd.x,p.y+sd.y,p.z+sd.z, p.x-sd.x,p.y-sd.y,p.z-sd.z);
+    uv.push(i/N*2.6,0, i/N*2.6,1);
+    if (i < N) { const k = i*2; idx.push(k,k+1,k+2, k+1,k+3,k+2); }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos,3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv,2));
+  geo.setIndex(idx); geo.computeVertexNormals();
+  const g = new THREE.Group();
+  const m = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({map:t, roughness:1, side:THREE.DoubleSide}));
+  m.castShadow = true; g.add(m);
+  const clip = new THREE.Mesh(new THREE.BoxGeometry(.14,.05,.3), new THREE.MeshStandardMaterial({color:0xbfc3c8, metalness:.9, roughness:.3}));
+  { const q = P(0); clip.position.set(q.x, q.y+.03, q.z); clip.rotation.y = .4; } g.add(clip);
+  return g;
+}
+
+function bouquet(){
+  const g = new THREE.Group();
+  const kraft = new THREE.MeshStandardMaterial({color:0xb59a74, roughness:1, side:THREE.DoubleSide});
+  const cone = new THREE.Mesh(new THREE.CylinderGeometry(.75,.08,2.4,24,1,true), kraft);
+  cone.scale.z = .45; cone.castShadow = true;
+  const holder = new THREE.Group(); holder.add(cone);
+  const twine = new THREE.Mesh(new THREE.TorusGeometry(.3,.03,8,24), new THREE.MeshStandardMaterial({color:0xc9a66b, roughness:1}));
+  twine.rotation.x = Math.PI/2; twine.scale.y = .5; twine.position.y = -.55; holder.add(twine);
+  const polaroids = new THREE.Mesh(new THREE.PlaneGeometry(.95,.9),
+    new THREE.MeshStandardMaterial({map:crop('box-top.jpg',300,385,180,170,900,1600), side:THREE.DoubleSide}));
+  polaroids.position.set(0,1.3,.05); polaroids.rotation.x = -.15; holder.add(polaroids);
+  polaroids.rotation.x = -1.25;
+  holder.rotation.z = Math.PI/2 + .12;
+  holder.position.y = .36;
+  g.add(holder); return g;
+}
+
+const placements = [
+  ['Turtley amazing card',       turtleCard,  -1.5, -1.0,  .2,  .00],
+  ['Handwritten note',           noteCard,     1.7, -0.3, -.25, .00],
+  ['Basquiat postcard',          postcard,    -1.3,  1.8,  .4,  .01],
+  ['Train ticket (G20)',         ticket,       1.6,  1.3, -.2,  .05],
+  ['Birthday card',              birthdayCard, 0.0, -2.2,  0,   .00],
+  ['Subko Cacao bar',            chocolate,   -0.3,  0.4,  .08, .06],
+  ['Serendipity lanyard',        lanyard,      1.1,  1.6,  .5,  .2],
+  ['3D glasses: look with love', glasses,     -0.2,  2.6,  .1,  .06],
+  ['Cat sticker',                catSticker,  -2.0, -2.3,  .4,  .04],
+  ['Bouquet and polaroids',      bouquet,      1.6, -2.3, -.5,  .00],
+];
+const objects = [];
+for (const [name, build, x, z, rot, lift] of placements) {
+  const o = build();
+  o.position.set(x, BASE + lift, z); o.rotation.y += rot;
+  o.userData = {name, baseY: BASE + lift, lift: 0};
+  box.add(o); objects.push(o);
+}
+
+// keep photo details crisp: the photos already carry their own light, so tone the lit result down
+box.traverse(o => {
+  if (!o.isMesh) return;
+  for (const m of [].concat(o.material)) if (m.map && !m.userData.keepBright) { m.color.setScalar(.68); m.envMapIntensity = .35; }
+});
+
+// ---- interaction ----
+const ray = new THREE.Raycaster(), mouse = new THREE.Vector2(-9,-9);
+let opened = false, lidAngle = 0, hovered = null;
+const label = document.getElementById('label');
+const setMouse = e => mouse.set(e.clientX/innerWidth*2-1, -(e.clientY/innerHeight)*2+1);
+addEventListener('pointermove', setMouse);
+function rootOf(o){ while (o && !(o.userData && o.userData.name)) o = o.parent; return o; }
+function pick(){
+  ray.setFromCamera(mouse, camera);
+  return ray.intersectObjects([...objects, lid], true)[0];
+}
+// ---- sound ----
+// files live in sounds/ (see sounds/README.txt). Missing files play a quiet placeholder tone.
+const SOUND_KEYS = {
+  'Turtley amazing card':'turtle-card', 'Handwritten note':'note', 'Basquiat postcard':'postcard',
+  'Train ticket (G20)':'ticket', 'Birthday card':'birthday-card', 'Subko Cacao bar':'chocolate',
+  'Serendipity lanyard':'lanyard', '3D glasses: look with love':'glasses', 'Cat sticker':'cat-sticker',
+  'Bouquet and polaroids':'bouquet',
+};
+const PLACEHOLDERS = true;
+const EXTS = ['mp3','wav','ogg','m4a'];
+const ALL_KEYS = ['bg-sound','lid-open','lid-close','room-tone', ...Object.values(SOUND_KEYS).flatMap(k => [k+'-surface', k+'-memory'])];
+const raw = {}, buffers = {};
+let actx = null, master = null, muted = false, ready = null;
+
+// fetch the files up front; decoding waits for the first click (browsers block audio until then)
+ALL_KEYS.forEach(async key => {
+  for (const ext of EXTS) {
+    try { const r = await fetch(`sounds/${key}.${ext}`); if (r.ok) { raw[key] = await r.arrayBuffer(); return; } } catch (e) {}
+  }
+});
+function ensureAudio(){
+  if (ready) return ready;
+  actx = new (window.AudioContext || window.webkitAudioContext)();
+  master = actx.createGain(); master.gain.value = muted ? 0 : 1; master.connect(actx.destination);
+  ready = (async () => {
+    await new Promise(r => setTimeout(r, 400));
+    for (const key of Object.keys(raw)) { try { buffers[key] = await actx.decodeAudioData(raw[key].slice(0)); } catch (e) { console.warn('could not decode', key); } }
+  })();
+  return ready;
+}
+function placeholder(key, out){
+  let h = 0; for (const c of key) h = (h*31 + c.charCodeAt(0)) >>> 0;
+  const o = actx.createOscillator(); o.type = 'sine';
+  const memory = key.endsWith('-memory'), lidSnd = key.startsWith('lid');
+  o.frequency.value = lidSnd ? 140 : memory ? 110 + h%80 : 330 + h%300;
+  o.connect(out); o.start();
+  o.stop(actx.currentTime + (memory ? 8 : lidSnd ? .35 : .18));
+  return o;
+}
+// returns a handle with stop(fadeSeconds); real:true skips placeholders
+function play(key, {gain = 1, loop = false, fadeIn = .03, dest = master, real = false} = {}){
+  if (!actx || muted) return null;
+  const g = actx.createGain(); g.gain.value = 0; g.connect(dest);
+  g.gain.linearRampToValueAtTime(gain * (buffers[key] ? 1 : .12), actx.currentTime + fadeIn);
+  let src;
+  if (buffers[key]) { src = actx.createBufferSource(); src.buffer = buffers[key]; src.loop = loop; src.connect(g); src.start(); }
+  else if (PLACEHOLDERS && !real && key !== 'room-tone') src = placeholder(key, g);
+  else return null;
+  return { gain: g, stop(fade = .15){
+    const n = actx.currentTime; g.gain.cancelScheduledValues(n); g.gain.setValueAtTime(g.gain.value, n);
+    g.gain.linearRampToValueAtTime(0, n + fade); try { src.stop(n + fade + .02); } catch (e) {}
+  }};
+}
+let bg = null, bgAlive = false, ambient = null, holding = null, holdObj = null, lastHover = 0;
+function finale(){
+  const bus = actx.createGain(); bus.connect(master);
+  const t = actx.currentTime; bus.gain.setValueAtTime(1, t + 2.5); bus.gain.linearRampToValueAtTime(0, t + 6.5);
+  Object.values(SOUND_KEYS).forEach((k, i) => setTimeout(() => play(k + '-memory', {gain:.14, fadeIn:.5, dest:bus, real:true}), 500 + i*130));
+}
+// background sound: starts on the first click anywhere and loops for the whole visit
+async function startBg(){
+  await ensureAudio(); if (actx.state === 'suspended' && !muted) actx.resume();
+  if (!bg) { bg = play('bg-sound', {gain:.45, loop:true, fadeIn:3, real:true}); bgAlive = !!bg; }
+}
+addEventListener('pointerdown', startBg, {once:true});
+const hooks = {
+  async lid(open){
+    await ensureAudio(); if (actx.state === 'suspended' && !muted) actx.resume();
+    if (open) { play('lid-open'); ambient = play('room-tone', {gain:.2, loop:true, fadeIn:2}); }
+    else { play('lid-close'); if (ambient) ambient.stop(1.5); ambient = null; finale(); }
+  },
+  hover(name){
+    if (!opened || !actx || holding) return;
+    const now = performance.now(); if (now - lastHover < 120) return; lastHover = now;
+    play(SOUND_KEYS[name] + '-surface', {gain:.8});
+  },
+  holdStart(name, obj){
+    if (!actx) return;
+    holding = play(SOUND_KEYS[name] + '-memory', {gain:1, fadeIn:.5}); holdObj = obj; controls.enabled = false;
+    if (ambient) ambient.gain.gain.linearRampToValueAtTime(.06, actx.currentTime + .4);
+    if (bg) bg.gain.gain.linearRampToValueAtTime(.15, actx.currentTime + .4);
+  },
+  holdEnd(){
+    if (holding) holding.stop(.8);
+    if (ambient && actx) ambient.gain.gain.linearRampToValueAtTime(.2, actx.currentTime + 1);
+    if (bg && actx) bg.gain.gain.linearRampToValueAtTime(.45, actx.currentTime + 1);
+    holding = null; holdObj = null; controls.enabled = true;
+  },
+};
+addEventListener('pointerdown', e => {
+  if (e.target !== renderer.domElement) return;
+  setMouse(e);
+  const hit = pick();
+  if (!hit) return;
+  if (hit.object.userData.target === lid) { opened = !opened; hooks.lid(opened); }
+  else if (opened) { const r = rootOf(hit.object); if (r) hooks.holdStart(r.userData.name, r); }
+});
+addEventListener('pointerup', () => hooks.holdEnd());
+addEventListener('pointercancel', () => hooks.holdEnd());
+document.getElementById('mute').onclick = async e => {
+  muted = !muted; e.currentTarget.textContent = 'Sound: ' + (muted ? 'off' : 'on');
+  if (!actx) return;
+  if (muted) {
+    master.gain.cancelScheduledValues(actx.currentTime); master.gain.setValueAtTime(0, actx.currentTime);
+    holding = holding && (holding.stop(.02), null); if (ambient) { ambient.stop(.02); ambient = null; }
+    await actx.suspend();                                   // hard stop: nothing can play while muted
+  } else {
+    await actx.resume(); master.gain.setValueAtTime(1, actx.currentTime);
+    if (!bg || !bgAlive) { bg = null; startBg(); }
+    if (opened && !ambient) ambient = play('room-tone', {gain:.2, loop:true, fadeIn:1});
+  }
+};
+
+document.getElementById('export').onclick = () => {
+  new GLTFExporter().parse(box, buf => {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([buf], {type:'model/gltf-binary'}));
+    a.download = 'memory-box.glb'; a.click();
+  }, console.error, {binary:true});
+};
+
+function animate(){
+  requestAnimationFrame(animate);
+  lidAngle += ((opened ? -Math.PI*0.62 : 0) - lidAngle) * .08;
+  lid.rotation.x = lidAngle;
+  const h = pick();
+  const obj = h && h.object.userData.target !== lid ? rootOf(h.object) : null;
+  if (obj !== hovered) { hovered = obj; label.textContent = obj ? obj.userData.name : ''; if (obj) hooks.hover(obj.userData.name); }
+  for (const o of objects) {
+    const target = o === holdObj ? 1.1 : (o === hovered && opened) ? .5 : 0;
+    o.userData.lift += (target - o.userData.lift) * .15;
+    o.position.y = o.userData.baseY + o.userData.lift;
+  }
+  controls.update();
+  renderer.render(scene, camera);
+}
+animate();
+addEventListener('resize', () => {camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight);});
+</script>
+</body>
+</html>
