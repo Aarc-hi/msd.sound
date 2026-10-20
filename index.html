@@ -29,9 +29,10 @@ const camera = new THREE.PerspectiveCamera(40, innerWidth/innerHeight, 0.1, 100)
 const renderer = new THREE.WebGLRenderer({antialias:true, alpha:true});
 renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 0.7;
 renderer.setSize(innerWidth, innerHeight);
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.VSMShadowMap;
+renderer.shadowMap.autoUpdate = false;   // shadows are redrawn only when something moves (see animate)
 document.body.appendChild(renderer.domElement);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true; controls.enableZoom = false;   // the camera distance is driven by scroll / auto-pan below
@@ -43,8 +44,8 @@ scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
 scene.add(new THREE.AmbientLight(0xffffff, 0.12));
 const sun = new THREE.DirectionalLight(0xfff4e6, 1.5);   // key: upper left, soft shadows
 sun.position.set(-9, 10, 1.5); sun.castShadow = true;
-sun.shadow.mapSize.set(4096, 4096); sun.shadow.radius = 9; sun.shadow.blurSamples = 20; sun.shadow.bias = -0.0003; sun.shadow.normalBias = .02;
-sun.shadow.camera.left = -13; sun.shadow.camera.right = 13; sun.shadow.camera.top = 9; sun.shadow.camera.bottom = -9; sun.shadow.camera.far = 40;
+sun.shadow.mapSize.set(2048, 2048); sun.shadow.radius = 9; sun.shadow.blurSamples = 12; sun.shadow.bias = -0.0003; sun.shadow.normalBias = .02;
+sun.shadow.camera.left = -8; sun.shadow.camera.right = 8; sun.shadow.camera.top = 8; sun.shadow.camera.bottom = -8; sun.shadow.camera.far = 40;
 scene.add(sun);
 const fill = new THREE.DirectionalLight(0xe8f0ff, 0.5); fill.position.set(8, 5, 4); scene.add(fill);
 const rim = new THREE.DirectionalLight(0xffffff, 0.6); rim.position.set(0, 6, -9); scene.add(rim);
@@ -358,7 +359,7 @@ const SOUND_KEYS = {
   'Bouquet and polaroids':'bouquet',
 };
 // per-sound loudness (1 = as recorded); lower it if a recording is too loud
-const SOUND_GAIN = { 'birthday-card': .4 };
+const SOUND_GAIN = { 'birthday-card': .4, 'lanyard': 3, 'chocolate': 1.6, 'glasses': .7, 'note': .7 };
 const PLACEHOLDERS = false;   // no stand-in beeps: only your real recordings play
 const EXTS = ['mp3','wav','ogg','m4a'];
 const ALL_KEYS = ['bg-sound','lid-open','room-tone', ...Object.values(SOUND_KEYS).map(k => k+'-memory')];
@@ -391,12 +392,25 @@ function placeholder(key, out){
   return o;
 }
 // returns a handle with stop(fadeSeconds); real:true skips placeholders
-function play(key, {gain = 1, loop = false, fadeIn = .03, dest = master, real = false} = {}){
+// decay: if set (e.g. .55) the sound repeats, each pass quieter than the last, until it fades to nothing
+function play(key, {gain = 1, loop = false, fadeIn = .03, dest = master, real = false, decay = 0} = {}){
   if (!actx || muted) return null;
   const g = actx.createGain(); g.gain.value = 0; g.connect(dest);
   g.gain.linearRampToValueAtTime(gain * (buffers[key] ? 1 : .12), actx.currentTime + fadeIn);
   let src;
-  if (buffers[key]) { src = actx.createBufferSource(); src.buffer = buffers[key]; src.loop = loop; src.connect(g); src.start(); }
+  if (buffers[key] && decay) {
+    let pass = 0, alive = true, cur = null;
+    const next = () => {
+      const lv = Math.pow(decay, pass);
+      if (!alive || lv < .06) return;
+      const s2 = actx.createBufferSource(); s2.buffer = buffers[key];
+      const pg = actx.createGain(); pg.gain.value = lv; s2.connect(pg); pg.connect(g);
+      s2.onended = next; s2.start(); cur = s2; pass++;
+    };
+    next();
+    src = { stop(t){ alive = false; try { cur && cur.stop(t); } catch (e) {} } };
+  }
+  else if (buffers[key]) { src = actx.createBufferSource(); src.buffer = buffers[key]; src.loop = loop; src.connect(g); src.start(); }
   else if (PLACEHOLDERS && !real && key !== 'room-tone') src = placeholder(key, g);
   else return null;
   return { gain: g, stop(fade = .15){
@@ -427,11 +441,11 @@ const hooks = {
     if (!opened || !actx) return;
     hooks.hoverEnd();
     const key = SOUND_KEYS[name];
-    holding = play(key + '-memory', {gain:SOUND_GAIN[key] ?? 1, fadeIn:.4, real:true});
+    holding = play(key + '-memory', {gain:SOUND_GAIN[key] ?? 1, fadeIn:.4, real:true, decay:.55});
     if (!holding) return;
     if (ambient) ambient.gain.gain.linearRampToValueAtTime(.06, actx.currentTime + .4);
   },
-  hoverEnd(fade = .6){
+  hoverEnd(fade = 2.2){
     if (!holding) return;
     holding.stop(fade); holding = null;
     if (ambient && actx) ambient.gain.gain.linearRampToValueAtTime(.2, actx.currentTime + 1);
@@ -489,19 +503,26 @@ function updateCamera(){
   camera.position.copy(_tgt).add(_off.setFromSpherical(_sph));
   camera.lookAt(_tgt);
 }
+let frame = 0;
 function animate(){
   requestAnimationFrame(animate);
-  lidAngle += ((opened ? -Math.PI*0.62 : 0) - lidAngle) * .08;
+  frame++;
+  let moving = frame < 90;                       // let textures settle, then only redraw shadows on movement
+  const lidGoal = opened ? -Math.PI*0.62 : 0;
+  if (Math.abs(lidGoal - lidAngle) > .0004) moving = true;
+  lidAngle += (lidGoal - lidAngle) * .08;
   lid.rotation.x = lidAngle;
   const h = pick();
   const obj = h && h.object.userData.target !== lid ? rootOf(h.object) : null;
   if (obj !== hovered) { hovered = obj; hooks.hoverEnd(); if (obj) hooks.hover(obj.userData.name); }
   for (const o of objects) {
     const target = (o === hovered && opened) ? .5 : 0;
+    if (Math.abs(target - o.userData.lift) > .001) moving = true;
     o.userData.lift += (target - o.userData.lift) * .15;
     o.position.y = o.userData.baseY + o.userData.lift;
   }
   updateCamera();
+  if (moving) renderer.shadowMap.needsUpdate = true;
   renderer.render(scene, camera);
 }
 animate();
