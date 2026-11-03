@@ -29,6 +29,12 @@
   #list li:last-child{border-bottom:0}
   #list b{display:block;font-weight:700;font-size:14px;letter-spacing:.01em;margin-bottom:3px}
   #list span{display:block;font-size:13px;line-height:1.5;color:rgba(43,42,39,.78)}
+  #note-btn{left:14px;right:auto;top:44px}
+  #note-panel{position:fixed;top:78px;left:14px;z-index:5;width:min(380px,calc(100vw - 28px));max-height:0;overflow:hidden;opacity:0;transform:translateY(-8px);pointer-events:none;box-sizing:border-box;background:rgba(250,248,244,.86);-webkit-backdrop-filter:blur(30px);backdrop-filter:blur(30px);border:1px solid rgba(255,255,255,.6);border-radius:20px;box-shadow:0 14px 40px rgba(0,0,0,.14);transition:max-height .6s cubic-bezier(.2,.8,.2,1),opacity .35s ease,transform .5s cubic-bezier(.2,.8,.2,1)}
+  #note-panel.open{max-height:min(78vh,720px);overflow:auto;opacity:1;transform:none;pointer-events:auto;scrollbar-width:thin;scrollbar-color:rgba(43,42,39,.3) transparent}
+  #note-panel .in{padding:20px 24px 8px}
+  #note-panel p{margin:0 0 16px;font-size:14.5px;line-height:1.6}
+  #note-panel p.hint{color:#2a52be}
 </style>
 <script type="importmap">
 {"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
@@ -39,6 +45,8 @@
 <div id="intro"><div class="card"><p>This is a box of keepsakes that you open to hear. I took a box of small things I’ve collected over the past 4 years that mean something to me, a ticket, a note, a lanyard, a few cards and rebuilt it as a 3D object you can look into. Each object inside carries a sound I recorded that is connected to its object. The sound isn’t the noise the object itself would make; it’s the memory behind it. When you rest the pointer on any object, it lifts up a little and the sound of its memory plays, then repeats quieter and fades away, the way a memory does. The whole piece is meant to feel quiet and personal, like opening a drawer in someone’s room.</p><p class="hint">Hover over the objects after opening the box to listen to their connected sounds.</p><button class="explore" id="explore">Explore</button></div></div>
 <button id="list-btn" aria-expanded="false" aria-controls="list">Objects +</button>
 <div id="list" role="region" aria-label="Objects in the box"><ul><li><b>Turtley amazing card</b><span>A hand-painted card given by my friend, and everyone was laughing on it.</span></li><li><b>Birthday card</b><span>My most recent birthday, when everyone wrote me a note on these small cards.</span></li><li><b>Handwritten note</b><span>An autograph from an artist called Darzi. The audio is from the gig.</span></li><li><b>Album cover</b><span>The artwork from The Strokes’ album cover. It plays a clip of one of the songs.</span></li><li><b>Train ticket</b><span>A paper ticket from a Mumbai train. It plays a sound of me and my friends walking towards the station.</span></li><li><b>Serendipity lanyard</b><span>A crumpled checkered ribbon from the Serendipity Arts Festival. It plays a sound from that time.</span></li><li><b>Subko Cacao packet</b><span>A bar of milk chocolate in a teal wrapper. It plays the sounds of the day we got the chocolate in Mumbai with my friends.</span></li><li><b>3D glasses</b><span>Coldplay paper glasses with “look with love” written on them. They play a Coldplay track from their concert day in Ahmedabad.</span></li><li><b>Cat sticker</b><span>A hand-drawn sleeping cat, one of the cats I used to feed. It plays the cat’s sound.</span></li><li><b>Bouquet and polaroids</b><span>A kraft-paper cone of dried flowers with four polaroids tucked in. It plays the audio from the day I got it for my friend.</span></li></ul></div>
+<button id="note-btn" aria-expanded="false" aria-controls="note-panel">Concept note +</button>
+<div id="note-panel" role="region" aria-label="Concept note"></div>
 <button id="mute" style="left:14px;right:auto">Sound: on</button>
 <script type="module">
 import * as THREE from 'three';
@@ -600,7 +608,7 @@ let pTarget = 0, pCur = 0, userScrolled = false, userPhi = 0, lastPhi = S0.phi, 
 camera.position.copy(P0); controls.target.copy(T0); camera.lookAt(T0);
 let introOpen = true;                                   // the camera waits, and scroll is ignored, until the visitor presses Explore
 addEventListener("wheel", e => {
-  if (e.target.closest && e.target.closest("#list, #intro .card")) return;   // let the objects list (and the note on small screens) scroll normally
+  if (e.target.closest && e.target.closest("#list, #note-panel, #intro .card")) return;   // let the objects list (and the note on small screens) scroll normally
   e.preventDefault(); if (introOpen) return; userScrolled = true;
   pTarget = Math.min(1, Math.max(0, pTarget + e.deltaY * .0009));
 }, {passive:false});
@@ -613,6 +621,15 @@ document.getElementById("explore").addEventListener("click", () => {
 {
   const btn = document.getElementById("list-btn"), panel = document.getElementById("list");
   const set = open => { panel.classList.toggle("open", open); btn.setAttribute("aria-expanded", open); btn.textContent = open ? "Objects −" : "Objects +"; };
+  btn.addEventListener("click", () => set(!panel.classList.contains("open")));
+  addEventListener("pointerdown", e => { if (!panel.contains(e.target) && e.target !== btn) set(false); });
+  addEventListener("keydown", e => { if (e.key === "Escape") set(false); });
+}
+// concept note: the same note as the intro, reopened in a panel on the left
+{
+  const btn = document.getElementById("note-btn"), panel = document.getElementById("note-panel");
+  panel.innerHTML = "<div class=\"in\">" + [...document.querySelectorAll("#intro .card p")].map(p => "<p class=\"" + p.className + "\">" + p.innerHTML + "</p>").join("") + "</div>";
+  const set = open => { panel.classList.toggle("open", open); btn.setAttribute("aria-expanded", open); btn.textContent = open ? "Concept note −" : "Concept note +"; };
   btn.addEventListener("click", () => set(!panel.classList.contains("open")));
   addEventListener("pointerdown", e => { if (!panel.contains(e.target) && e.target !== btn) set(false); });
   addEventListener("keydown", e => { if (e.key === "Escape") set(false); });
