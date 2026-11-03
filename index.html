@@ -343,6 +343,16 @@ box.traverse(o => {
 // ---- interaction ----
 const ray = new THREE.Raycaster(), mouse = new THREE.Vector2(-9,-9);
 let opened = false, lidAngle = 0, hovered = null;
+// lid motion is timed to the cardboard sound (3 s file: the lid moves from 0.15 s and lands on the thump at ~1.3 s)
+const LID_OPEN = -Math.PI*0.62, LID_DELAY = 150, LID_DUR = 1150;
+// closing: the sound joins late so its loudest moment (0.6 s in) lands as the lid meets the box
+// closing uses only the last part of the cardboard recording (the thump at 1.3 s + its tail), so it reads as the lid landing
+const CLOSE_CLIP = { offset: 1.1, length: 1.0 }, CLOSE_SOUND_DELAY = LID_DUR - 200;   // thump is 0.2 s into the clip
+let lidAnim = null;
+function startLid(open, withSound){
+  const latency = withSound ? (actx.outputLatency || actx.baseLatency || 0)*1000 : 0;     // speaker delay
+  lidAnim = { from: lidAngle, to: open ? LID_OPEN : 0, start: performance.now() + latency + (withSound ? LID_DELAY : 0), dur: LID_DUR };
+}
 const setMouse = e => mouse.set(e.clientX/innerWidth*2-1, -(e.clientY/innerHeight)*2+1);
 addEventListener('pointermove', setMouse);
 function rootOf(o){ while (o && !(o.userData && o.userData.name)) o = o.parent; return o; }
@@ -359,27 +369,30 @@ const SOUND_KEYS = {
   'Bouquet and polaroids':'bouquet',
 };
 // per-sound loudness (1 = as recorded); lower it if a recording is too loud
-const SOUND_GAIN = { 'birthday-card': .4, 'lanyard': 3, 'chocolate': 1.6, 'glasses': .7, 'note': .7 };
+const SOUND_GAIN = { 'birthday-card': .4, 'lanyard': 3, 'chocolate': 1.6, 'glasses': .7, 'note': .7, 'ticket': 1.7 };
 const PLACEHOLDERS = false;   // no stand-in beeps: only your real recordings play
 const EXTS = ['mp3','wav','ogg','m4a'];
 const ALL_KEYS = ['bg-sound','lid-open','room-tone', ...Object.values(SOUND_KEYS).map(k => k+'-memory')];
 const raw = {}, buffers = {};
-let actx = null, master = null, muted = false, ready = null;
+let actx = null, master = null, muted = false, ready = null, readyAll = null;
 
 // fetch the files up front; decoding waits for the first click (browsers block audio until then)
-ALL_KEYS.forEach(async key => {
+const fetchFor = {};
+ALL_KEYS.forEach(key => { fetchFor[key] = (async () => {
   for (const ext of EXTS) {
     try { const r = await fetch(`sounds/${key}.${ext}`); if (r.ok) { raw[key] = await r.arrayBuffer(); return; } } catch (e) {}
   }
-});
+})(); });
 function ensureAudio(){
   if (ready) return ready;
   actx = new (window.AudioContext || window.webkitAudioContext)();
   master = actx.createGain(); master.gain.value = muted ? 0 : 1; master.connect(actx.destination);
-  ready = (async () => {
-    await new Promise(r => setTimeout(r, 400));
-    for (const key of Object.keys(raw)) { try { buffers[key] = await actx.decodeAudioData(raw[key].slice(0)); } catch (e) { console.warn('could not decode', key); } }
-  })();
+  const decode = async key => {
+    await fetchFor[key];
+    if (raw[key]) { try { buffers[key] = await actx.decodeAudioData(raw[key].slice(0)); } catch (e) { console.warn('could not decode', key); } }
+  };
+  ready = decode('lid-open');                                   // the lid sound first: the lid animation waits only for this
+  readyAll = ready.then(async () => { for (const key of ALL_KEYS) if (!(key in buffers)) await decode(key); });
   return ready;
 }
 function placeholder(key, out){
@@ -393,7 +406,7 @@ function placeholder(key, out){
 }
 // returns a handle with stop(fadeSeconds); real:true skips placeholders
 // decay: if set (e.g. .55) the sound repeats, each pass quieter than the last, until it fades to nothing
-function play(key, {gain = 1, loop = false, fadeIn = .03, dest = master, real = false, decay = 0} = {}){
+function play(key, {gain = 1, loop = false, fadeIn = .03, dest = master, real = false, decay = 0, offset = 0, length = undefined} = {}){
   if (!actx || muted) return null;
   const g = actx.createGain(); g.gain.value = 0; g.connect(dest);
   g.gain.linearRampToValueAtTime(gain * (buffers[key] ? 1 : .12), actx.currentTime + fadeIn);
@@ -410,7 +423,7 @@ function play(key, {gain = 1, loop = false, fadeIn = .03, dest = master, real = 
     next();
     src = { stop(t){ alive = false; try { cur && cur.stop(t); } catch (e) {} } };
   }
-  else if (buffers[key]) { src = actx.createBufferSource(); src.buffer = buffers[key]; src.loop = loop; src.connect(g); src.start(); }
+  else if (buffers[key]) { src = actx.createBufferSource(); src.buffer = buffers[key]; src.loop = loop; src.connect(g); src.start(0, offset, length); }
   else if (PLACEHOLDERS && !real && key !== 'room-tone') src = placeholder(key, g);
   else return null;
   return { gain: g, stop(fade = .15){
@@ -426,15 +439,23 @@ function finale(){
 }
 // background sound: starts on the first click anywhere and loops for the whole visit
 async function startBg(){
-  await ensureAudio(); if (actx.state === 'suspended' && !muted) actx.resume();
+  await ensureAudio(); await readyAll; if (actx.state === 'suspended' && !muted) actx.resume();
   if (!bg) { bg = play('bg-sound', {gain:.45, loop:true, fadeIn:3, real:true}); bgAlive = !!bg; }
 }
 addEventListener('pointerdown', startBg, {once:true});
 const hooks = {
   async lid(open){
     await ensureAudio(); if (actx.state === 'suspended' && !muted) actx.resume();
-    if (open) { play('lid-open', {gain:2.5, real:true}); ambient = play('room-tone', {gain:.2, loop:true, fadeIn:2}); }
-    else { hooks.hoverEnd(2.5); play('lid-open', {gain:2.5, real:true}); if (ambient) ambient.stop(2.5); ambient = null; }   // anything playing inside fades away slowly
+    if (open) {
+      const snd = play('lid-open', {gain:2.5, real:true});
+      startLid(true, !!snd);                                        // opening: the lid starts exactly when the sound starts
+      ambient = play('room-tone', {gain:.2, loop:true, fadeIn:2});
+    } else {
+      startLid(false, false);                                       // closing: the lid starts moving first...
+      const latency = (actx.outputLatency || actx.baseLatency || 0)*1000;
+      setTimeout(() => play('lid-open', {gain:2.5, real:true, ...CLOSE_CLIP}), Math.max(0, CLOSE_SOUND_DELAY - latency));   // ...and the sound comes in as it nears the box
+      hooks.hoverEnd(2.5); if (ambient) ambient.stop(2.5); ambient = null;    // anything playing inside fades away slowly
+    }
   },
   // an object's sound plays for as long as the pointer rests on it (lid open), and fades out when it leaves
   hover(name){
@@ -508,9 +529,13 @@ function animate(){
   requestAnimationFrame(animate);
   frame++;
   let moving = frame < 90;                       // let textures settle, then only redraw shadows on movement
-  const lidGoal = opened ? -Math.PI*0.62 : 0;
-  if (Math.abs(lidGoal - lidAngle) > .0004) moving = true;
-  lidAngle += (lidGoal - lidAngle) * .08;
+  const prevLid = lidAngle;
+  if (lidAnim) {
+    const t = (performance.now() - lidAnim.start) / lidAnim.dur;
+    if (t >= 1) { lidAngle = lidAnim.to; lidAnim = null; }
+    else if (t > 0) { const e = t < .5 ? 2*t*t : 1 - Math.pow(-2*t + 2, 2)/2; lidAngle = lidAnim.from + (lidAnim.to - lidAnim.from)*e; }
+  }
+  if (lidAngle !== prevLid) moving = true;
   lid.rotation.x = lidAngle;
   const h = pick();
   const obj = h && h.object.userData.target !== lid ? rootOf(h.object) : null;
